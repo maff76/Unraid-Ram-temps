@@ -1,0 +1,45 @@
+<?xml version="1.0" standalone="yes"?>
+
+<!DOCTYPE PLUGIN [
+<!ENTITY name      "spd5118">
+<!ENTITY author    "Local / custom SPD5118 driver">
+<!ENTITY version   "2026.08.16.2">
+<!ENTITY kernel    "6.18.38-Unraid">
+]>
+
+<PLUGIN
+    name="&name;"
+    author="&author;"
+    version="&version;">
+
+<CHANGES>
+### 2026.08.16.2
+- Fixed complete plugin removal
+- Uninstall now removes the installed Slackware package
+- Uninstall removes the installed SPD5118 kernel module
+- Rebuilds module dependencies after removal
+- Kernel locked to 6.18.38-Unraid
+- Requires regmap-i2c
+</CHANGES>
+
+<FILE Name="/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz" Run="upgradepkg --install-new">
+<LOCAL>/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz</LOCAL>
+</FILE>
+
+<FILE Name="/boot/config/plugins/spd5118/spd5118">
+<LOCAL>/boot/config/plugins/spd5118/spd5118</LOCAL>
+</FILE>
+
+<EXECUTE>
+/bin/bash /boot/config/plugins/spd5118/spd5118 start
+</EXECUTE>
+
+<REMOVE>
+/bin/bash /boot/config/plugins/spd5118/spd5118 remove
+rm -f /usr/local/sbin/spd5118-start
+rm -f /boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz
+rm -f /boot/config/plugins/spd5118/spd5118
+rmdir /boot/config/plugins/spd5118 2>/dev/null || true
+</REMOVE>
+
+</PLUGIN>
