@@ -3,8 +3,9 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "spd5118">
 <!ENTITY author    "Local / custom SPD5118 driver">
-<!ENTITY version   "2026.08.16.2">
+<!ENTITY version   "2026.08.16.3">
 <!ENTITY kernel    "6.18.38-Unraid">
+<!ENTITY plugin    "/boot/config/plugins/&name;">
 ]>
 
 <PLUGIN
@@ -13,6 +14,17 @@
     version="&version;">
 
 <CHANGES>
+### 2026.08.16.3
+- Fixed Unraid plugin uninstall handling
+- Uses Method="remove" for plugin removal
+- Runs SPD5118 cleanup script before deleting plugin files
+- Removes installed SPD5118 kernel module
+- Removes installed Slackware package
+- Rebuilds module dependencies after removal
+- Removes plugin files from flash
+- Kernel locked to 6.18.38-Unraid
+- Requires regmap-i2c
+
 ### 2026.08.16.2
 - Fixed complete plugin removal
 - Uninstall now removes the installed Slackware package
@@ -22,24 +34,72 @@
 - Requires regmap-i2c
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz" Run="upgradepkg --install-new">
-<LOCAL>/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz</LOCAL>
+<!-- Install SPD5118 Slackware package -->
+<FILE Name="&plugin;/spd5118-6.18.38-Unraid-1.txz" Run="upgradepkg --install-new">
+<LOCAL>&plugin;/spd5118-6.18.38-Unraid-1.txz</LOCAL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/spd5118/spd5118">
-<LOCAL>/boot/config/plugins/spd5118/spd5118</LOCAL>
+<!-- Install helper/startup script -->
+<FILE Name="&plugin;/spd5118">
+<LOCAL>&plugin;/spd5118</LOCAL>
 </FILE>
 
-<EXECUTE>
-/bin/bash /boot/config/plugins/spd5118/spd5118 start
-</EXECUTE>
+<!-- Start/activate SPD5118 after installation -->
+<FILE Run="/bin/bash">
+<INLINE>
 
-<REMOVE>
-/bin/bash /boot/config/plugins/spd5118/spd5118 remove
+echo "--------------------------------"
+echo "--- Starting SPD5118 -----------"
+echo "--------------------------------"
+
+/bin/bash &plugin;/spd5118 start
+
+echo
+echo "--------------------------------"
+echo "--- SPD5118 started ------------"
+echo "--------------------------------"
+echo
+
+</INLINE>
+</FILE>
+
+<!-- Uninstall -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+
+echo "--------------------------------"
+echo "--- Uninstalling SPD5118 -------"
+echo "--------------------------------"
+
+# Run the plugin's own cleanup before deleting it
+if [ -f &plugin;/spd5118 ]; then
+    /bin/bash &plugin;/spd5118 remove 2>/dev/null || true
+fi
+
+# Make sure the SPD5118 module is unloaded
+/sbin/modprobe -r spd5118 2>/dev/null || true
+
+# Remove installed Slackware package if still present
+if ls /var/log/packages/spd5118-* >/dev/null 2>&amp;1 ; then
+    /sbin/removepkg spd5118 2>/dev/null || true
+fi
+
+# Remove any helper installed outside the package
 rm -f /usr/local/sbin/spd5118-start
-rm -f /boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz
-rm -f /boot/config/plugins/spd5118/spd5118
-rmdir /boot/config/plugins/spd5118 2>/dev/null || true
-</REMOVE>
+
+# Rebuild module dependency database
+/sbin/depmod -a
+
+# Remove all plugin files from flash
+rm -rf &plugin;
+
+echo
+echo "--------------------------------"
+echo "--- SPD5118 uninstalled --------"
+echo "--------------------------------"
+echo
+
+</INLINE>
+</FILE>
 
 </PLUGIN>
