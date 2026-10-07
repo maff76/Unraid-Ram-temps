@@ -1,0 +1,254 @@
+#!/bin/bash
+
+PLUGIN_DIR="/boot/config/plugins/spd5118"
+KERNEL_EXPECTED="6.18.38-Unraid"
+MODULE_PATH="/lib/modules/$KERNEL_EXPECTED/extra/spd5118.ko"
+LOG_TAG="spd5118-plugin"
+
+log()
+{
+    logger -t "$LOG_TAG" "$*" 2>/dev/null || true
+    echo "$LOG_TAG: $*"
+}
+
+kernel_check()
+{
+    if [ "$(uname -r)" != "$KERNEL_EXPECTED" ]; then
+        log "Kernel $(uname -r) is NOT supported."
+        log "This module requires $KERNEL_EXPECTED."
+        return 1
+    fi
+
+    return 0
+}
+
+start()
+{
+    log "Starting SPD5118 driver"
+
+    if ! kernel_check; then
+        return 1
+    fi
+
+    if [ ! -f "$MODULE_PATH" ]; then
+        log "ERROR: module not installed: $MODULE_PATH"
+        return 1
+    fi
+
+    if ! grep -q '^regmap_i2c ' /proc/modules; then
+        log "Loading regmap-i2c"
+
+        if ! modprobe regmap-i2c; then
+            log "ERROR: failed to load regmap-i2c"
+            return 1
+        fi
+    else
+        log "regmap-i2c already loaded"
+    fi
+
+    if grep -q '^spd5118 ' /proc/modules; then
+        if [ -e /sys/bus/i2c/drivers/spd5118 ]; then
+            log "spd5118 already loaded and registered"
+            return 0
+        fi
+
+        log "spd5118 loaded but driver state is incomplete"
+
+        if ! rmmod spd5118; then
+            log "ERROR: could not unload incomplete spd5118"
+            return 1
+        fi
+    fi
+
+    log "Loading SPD5118 from $MODULE_PATH"
+
+    if ! modprobe spd5118; then
+        log "ERROR: failed to load SPD5118"
+        return 1
+    fi
+
+    if ! grep -q '^spd5118 ' /proc/modules; then
+        log "ERROR: spd5118 did not appear in /proc/modules"
+        return 1
+    fi
+
+    log "SPD5118 driver loaded successfully"
+
+    for addr in 0050 0051 0052 0053; do
+        if [ -L "/sys/bus/i2c/devices/0-$addr/driver" ]; then
+            DRIVER="$(readlink -f "/sys/bus/i2c/devices/0-$addr/driver")"
+            log "0-$addr -> $DRIVER"
+        else
+            log "WARNING: 0-$addr has no driver"
+        fi
+    done
+
+    return 0
+}
+
+stop()
+{
+    log "Stopping SPD5118 driver"
+
+    if grep -q '^spd5118 ' /proc/modules; then
+        if rmmod spd5118; then
+            log "SPD5118 driver unloaded"
+        else
+            log "WARNING: SPD5118 driver could not be unloaded"
+            return 1
+        fi
+    else
+        log "SPD5118 driver is not loaded"
+    fi
+
+    return 0
+}
+
+remove_package()
+{
+    log "Removing SPD5118 package(s)"
+
+    FOUND=0
+
+    for PKGFILE in /var/log/packages/spd5118-*; do
+        [ -f "$PKGFILE" ] || continue
+
+        FOUND=1
+        PKG="$(basename "$PKGFILE")"
+
+        log "Removing package: $PKG"
+
+        if ! removepkg "$PKG"; then
+            log "ERROR: removepkg failed for $PKG"
+            return 1
+        fi
+    done
+
+    if [ "$FOUND" -eq 0 ]; then
+        log "No SPD5118 package record found"
+    fi
+
+    # Make sure any stale module is removed too.
+    rm -f "$MODULE_PATH"
+
+    # Rebuild module dependency information.
+    depmod -a "$KERNEL_EXPECTED"
+
+    if [ -f "$MODULE_PATH" ]; then
+        log "ERROR: module still exists after package removal"
+        return 1
+    fi
+
+    log "SPD5118 package and module removed"
+    return 0
+}
+
+remove_all()
+{
+    log "Beginning complete SPD5118 removal"
+
+    if ! stop; then
+        log "ERROR: could not stop SPD5118"
+        return 1
+    fi
+
+    if ! remove_package; then
+        return 1
+    fi
+
+    # Do not remove regmap-i2c here. It may be used by other drivers.
+    log "SPD5118 removal complete"
+    return 0
+}
+
+restart()
+{
+    stop
+    start
+}
+
+status()
+{
+    echo "=== SPD5118 status ==="
+    echo "Kernel: $(uname -r)"
+    echo "Required kernel: $KERNEL_EXPECTED"
+
+    if [ "$(uname -r)" = "$KERNEL_EXPECTED" ]; then
+        echo "Kernel check: PASS"
+    else
+        echo "Kernel check: FAIL"
+    fi
+
+    echo "Module: $MODULE_PATH"
+
+    if [ -f "$MODULE_PATH" ]; then
+        echo "Module file: present"
+        echo "Module SHA256: $(sha256sum "$MODULE_PATH" | awk '{print $1}')"
+    else
+        echo "Module file: MISSING"
+    fi
+
+    if grep -q '^regmap_i2c ' /proc/modules; then
+        echo "regmap-i2c: loaded"
+    else
+        echo "regmap-i2c: NOT loaded"
+    fi
+
+    if grep -q '^spd5118 ' /proc/modules; then
+        echo "spd5118: loaded"
+    else
+        echo "spd5118: NOT loaded"
+    fi
+
+    for addr in 0050 0051 0052 0053; do
+        if [ -L "/sys/bus/i2c/devices/0-$addr/driver" ]; then
+            echo "0-$addr: $(readlink -f "/sys/bus/i2c/devices/0-$addr/driver")"
+        else
+            echo "0-$addr: no driver"
+        fi
+    done
+}
+
+check()
+{
+    echo "=== SPD5118 checks ==="
+
+    if ! kernel_check; then
+        return 1
+    fi
+
+    if [ ! -f "$MODULE_PATH" ]; then
+        echo "Module: MISSING"
+        return 1
+    fi
+
+    echo "Module: present"
+    echo "Module SHA256: $(sha256sum "$MODULE_PATH" | awk '{print $1}')"
+
+    return 0
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    remove)
+        remove_all
+        ;;
+    status)
+        status
+        ;;
+    check)
+        check
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|remove|status|check}"
+        exit 1
+        ;;
+esac

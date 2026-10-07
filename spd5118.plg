@@ -3,9 +3,8 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "spd5118">
 <!ENTITY author    "Local / custom SPD5118 driver">
-<!ENTITY version   "2026.08.16.3">
+<!ENTITY version   "2026.10.07.1">
 <!ENTITY kernel    "6.18.38-Unraid">
-<!ENTITY plugin    "/boot/config/plugins/&name;">
 ]>
 
 <PLUGIN
@@ -14,92 +13,137 @@
     version="&version;">
 
 <CHANGES>
-### 2026.08.16.3
-- Fixed Unraid plugin uninstall handling
-- Uses Method="remove" for plugin removal
-- Runs SPD5118 cleanup script before deleting plugin files
-- Removes installed SPD5118 kernel module
-- Removes installed Slackware package
-- Rebuilds module dependencies after removal
-- Removes plugin files from flash
-- Kernel locked to 6.18.38-Unraid
-- Requires regmap-i2c
+### 2026.10.07.1
+- Added bundled spdr DDR5 SPD decoder
+- Installs spdr to /usr/local/bin/spdr at plugin startup
+- Added "spd5118 info" support through the management script
+- Automatically discovers SPD5118-backed DDR5 DIMMs
+- Supports live decoding of JEDEC, manufacturing and XMP/EXPO data
+- Removes the volatile spdr executable during plugin removal
+- Retains reboot-safe depmod handling
 
-### 2026.08.16.2
-- Fixed complete plugin removal
-- Uninstall now removes the installed Slackware package
-- Uninstall removes the installed SPD5118 kernel module
-- Rebuilds module dependencies after removal
-- Kernel locked to 6.18.38-Unraid
-- Requires regmap-i2c
+### 2026.10.06.1
+- Fixed SPD5118 failing to load after reboot
+- Rebuilds kernel module dependencies after package installation
+- Runs depmod before attempting to load SPD5118
+- Simplified plugin removal to use the driver management script
+- Keeps package/module removal and depmod handling in one place
+
+### 2026.08.16.4
+- Fixed complete GUI removal
+- Explicitly removes installed Slackware package
+- Explicitly removes installed kernel module
+- Rebuilds module dependencies
+- Stops SPD5118 before package removal
+- Removes plugin files
 </CHANGES>
 
-<!-- Install SPD5118 Slackware package -->
-<FILE Name="&plugin;/spd5118-6.18.38-Unraid-1.txz" Run="upgradepkg --install-new">
-<LOCAL>&plugin;/spd5118-6.18.38-Unraid-1.txz</LOCAL>
+<FILE Name="/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz" Run="upgradepkg --install-new">
+<LOCAL>/boot/config/plugins/spd5118/spd5118-6.18.38-Unraid-1.txz</LOCAL>
 </FILE>
 
-<!-- Install helper/startup script -->
-<FILE Name="&plugin;/spd5118">
-<LOCAL>&plugin;/spd5118</LOCAL>
+<FILE Name="/boot/config/plugins/spd5118/spd5118">
+<LOCAL>/boot/config/plugins/spd5118/spd5118</LOCAL>
 </FILE>
 
-<!-- Start/activate SPD5118 after installation -->
-<FILE Run="/bin/bash">
-<INLINE>
-
-echo "--------------------------------"
-echo "--- Starting SPD5118 -----------"
-echo "--------------------------------"
-
-/bin/bash &plugin;/spd5118 start
-
-echo
-echo "--------------------------------"
-echo "--- SPD5118 started ------------"
-echo "--------------------------------"
-echo
-
-</INLINE>
+<FILE Name="/boot/config/plugins/spd5118/spdr">
+<LOCAL>/boot/config/plugins/spd5118/spdr</LOCAL>
 </FILE>
 
-<!-- Uninstall -->
-<FILE Run="/bin/bash" Method="remove">
-<INLINE>
-
+<EXECUTE>
 echo "--------------------------------"
-echo "--- Uninstalling SPD5118 -------"
+echo "--- Starting SPD5118 Driver ---"
 echo "--------------------------------"
 
-# Run the plugin's own cleanup before deleting it
-if [ -f &plugin;/spd5118 ]; then
-    /bin/bash &plugin;/spd5118 remove 2>/dev/null || true
+PLUGIN_DIR="/boot/config/plugins/spd5118"
+SCRIPT="$PLUGIN_DIR/spd5118"
+SPDR="$PLUGIN_DIR/spdr"
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "SPD5118: ERROR - management script is missing"
+    exit 1
 fi
 
-# Make sure the SPD5118 module is unloaded
-/sbin/modprobe -r spd5118 2>/dev/null || true
-
-# Remove installed Slackware package if still present
-if ls /var/log/packages/spd5118-* >/dev/null 2>&amp;1 ; then
-    /sbin/removepkg spd5118 2>/dev/null || true
+if [ ! -f "$SPDR" ]; then
+    echo "SPD5118: ERROR - spdr decoder is missing"
+    exit 1
 fi
 
-# Remove any helper installed outside the package
-rm -f /usr/local/sbin/spd5118-start
+echo "SPD5118: Updating kernel module dependencies"
 
-# Rebuild module dependency database
 /sbin/depmod -a
 
-# Remove all plugin files from flash
-rm -rf &plugin;
+if [ $? -ne 0 ]; then
+    echo "SPD5118: ERROR - depmod failed"
+    exit 1
+fi
+
+/bin/bash "$SCRIPT" start
+
+if [ $? -ne 0 ]; then
+    echo "SPD5118: ERROR - driver startup failed"
+    exit 1
+fi
+
+echo
+echo "SPD5118: Driver and SPD decoder ready"
+echo
+</EXECUTE>
+
+<REMOVE>
+
+echo "--------------------------------"
+echo "--- Removing SPD5118 Driver ---"
+echo "--------------------------------"
+
+PLUGIN_DIR="/boot/config/plugins/spd5118"
+SCRIPT="$PLUGIN_DIR/spd5118"
+
+if [ -f "$SCRIPT" ]; then
+
+    /bin/bash "$SCRIPT" remove
+
+    if [ $? -ne 0 ]; then
+        echo
+        echo "SPD5118: WARNING - live driver removal was not completely successful."
+        echo "SPD5118: Persistent plugin files will still be removed."
+        echo "SPD5118: A reboot may be required to completely unload the driver."
+    fi
+
+else
+
+    echo "SPD5118: Management script not found."
+
+    PKG="$(ls /var/log/packages/spd5118-* 2>/dev/null | head -n1)"
+
+    if [ -n "$PKG" ]; then
+        echo "SPD5118: Removing package $(basename "$PKG")"
+        removepkg "$(basename "$PKG")"
+    fi
+
+    rm -f /lib/modules/6.18.38-Unraid/extra/spd5118.ko
+    rm -f /usr/local/bin/spdr
+
+    /sbin/depmod -a
+
+fi
+
+rm -f /usr/local/bin/spdr
+rm -f /usr/local/sbin/spd5118-start
+
+rm -f "$PLUGIN_DIR/spd5118-6.18.38-Unraid-1.txz"
+rm -f "$PLUGIN_DIR/spd5118"
+rm -f "$PLUGIN_DIR/spdr"
+rm -f "$PLUGIN_DIR/spd5118.plg"
+
+rmdir "$PLUGIN_DIR" 2>/dev/null || true
 
 echo
 echo "--------------------------------"
-echo "--- SPD5118 uninstalled --------"
+echo "--- SPD5118 Driver Removed  ---"
 echo "--------------------------------"
 echo
 
-</INLINE>
-</FILE>
+</REMOVE>
 
 </PLUGIN>
